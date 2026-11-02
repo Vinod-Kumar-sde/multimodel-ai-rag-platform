@@ -1,32 +1,31 @@
-# ---- deps ----
-FROM node:20-slim AS deps
-WORKDIR /app
-COPY package.json package-lock.json* pnpm-lock.yaml* ./
-RUN if [ -f pnpm-lock.yaml ]; then \
-        npm install -g pnpm && pnpm install --frozen-lockfile; \
-    else \
-        npm ci; \
-    fi
 
-# ---- build ----
-FROM node:20-slim AS builder
+FROM python:3.11-slim
+
 WORKDIR /app
-COPY --from=deps /app/node_modules ./node_modules
+
+# System dependencies for PDF, OCR, image and database processing
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    poppler-utils \
+    tesseract-ocr \
+    libgl1 \
+    ghostscript \
+    libheif-dev \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt .
+
+RUN pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir \
+       torch torchvision \
+       --index-url https://download.pytorch.org/whl/cpu \
+    && pip install --no-cache-dir -r requirements.txt
+
 COPY . .
-ARG NEXT_PUBLIC_API_URL=http://localhost:8000
-ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
-RUN npm run build
 
-# ---- run ----
-FROM node:20-slim AS runner
-WORKDIR /app
-ENV NODE_ENV=production
+RUN mkdir -p data/uploads data/images
 
-COPY --from=builder /app/public ./public
-COPY --from=builder /app/.next ./.next
-COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/package.json ./package.json
-COPY --from=builder /app/next.config.mjs ./next.config.mjs
+EXPOSE 8000
 
-EXPOSE 3000
-CMD ["npm", "run", "start"]
+CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
